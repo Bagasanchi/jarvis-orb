@@ -1,0 +1,7 @@
+edge-tts>=7.0,<8
+numpy>=2.0,<3
+openai>=1.0,<3
+pygame-ce>=2.5,<3
+requests>=2.32,<3
+sounddevice>=0.5,<1
+vosk>=0.3.45,<0.4
