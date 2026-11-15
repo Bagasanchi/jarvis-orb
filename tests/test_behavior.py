@@ -1,6 +1,8 @@
 import json
 import os
 import unittest
+import tempfile
+from collections import deque
 from unittest.mock import Mock, patch
 import numpy as np
 
@@ -11,6 +13,13 @@ class DispatchTests(unittest.TestCase):
     def setUp(self):
         self.assistant = object.__new__(main.JarvisAssistant)
         self.assistant.brain = Mock()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        from jarvis.memory import Memory
+        from jarvis.desktop import Desktop
+        self.assistant.memory = Memory(os.path.join(self.temp.name, 'memory.db'))
+        self.assistant.desktop = Desktop()
+        self.addCleanup(self.assistant.desktop.close)
 
     def test_code_question_does_not_open_app(self):
         with patch.object(main, 'open_app') as launch:
@@ -29,14 +38,10 @@ class DispatchTests(unittest.TestCase):
             lookup.assert_called_once_with('New York')
 
     def test_plain_greeting_does_not_fetch_weather(self):
-        self.assistant._greeting_shown = False
-        self.assistant.speaker = Mock()
-        self.assistant.listener = Mock()
-        self.assistant.listener.listen.return_value = ''
         with patch.object(main, 'get_weather') as lookup:
-            self.assistant._on_woken()
+            answer = self.assistant.handle_user_text('hello')
             lookup.assert_not_called()
-        self.assertIn('Hello, sir.', self.assistant.speaker.say.call_args_list[0].args[0])
+        self.assertIn('Hello, sir.', answer)
 
     def test_unknown_app_is_not_passed_to_shell(self):
         with patch.object(app_opener.subprocess, 'run') as run:
@@ -53,6 +58,7 @@ class RecognitionTests(unittest.TestCase):
     def listener(self):
         listener = object.__new__(stt.Listener)
         listener.rec = Mock()
+        listener.prefix = deque()
         listener.rec.AcceptWaveform.return_value = False
         listener.rec.FinalResult.return_value = json.dumps({'text':'hello'})
         return listener

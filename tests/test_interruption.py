@@ -20,6 +20,9 @@ class SpeechCancellationTests(unittest.TestCase):
         self.mixer.start()
         self.addCleanup(self.mixer.stop)
         self.speaker = tts.Speaker()
+        self.settings = patch.object(tts.settings, 'get', side_effect=lambda key: 'edge' if key == 'tts_backend' else None)
+        self.settings.start()
+        self.addCleanup(self.settings.stop)
 
     def test_interrupt_during_generation_never_plays_late_audio(self):
         started = threading.Event()
@@ -74,6 +77,23 @@ class SpeechCancellationTests(unittest.TestCase):
 
 
 class VoiceMonitorTests(unittest.TestCase):
+    def test_natural_correction_is_buffered_before_stopping(self):
+        speaker = types.SimpleNamespace(playing=threading.Event(), interrupt=Mock())
+        speaker.playing.set()
+        listener = Mock()
+        rec = Mock()
+        rec.AcceptWaveform.return_value = False
+        rec.PartialResult.return_value = json.dumps({'partial': 'actually make that five minutes'})
+        stream = Mock(); stream.__enter__ = Mock(return_value=stream); stream.__exit__ = Mock()
+        stream.read.return_value = (bytes(1600), False)
+        from jarvis import interruption
+        with patch.object(interruption.settings, 'get', return_value=True), patch('vosk.KaldiRecognizer', return_value=rec), patch.object(interruption, 'input_stream', return_value=stream), patch.object(interruption.time, 'monotonic', side_effect=[0, .5]):
+            monitor = VoiceInterruption(speaker, Mock(), listener=listener)
+            monitor._run()
+        listener.feed_prefix.assert_called_once()
+        speaker.interrupt.assert_called_once()
+        stream.__exit__.assert_called_once()
+
     def test_only_explicit_stop_phrases(self):
         for text in ('Jarvis stop','STOP TALKING',' stop ','stop jarvis'):
             self.assertTrue(is_stop_phrase(text))

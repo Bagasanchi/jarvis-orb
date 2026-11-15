@@ -11,7 +11,7 @@ class OrbRenderer:
         self.large = pygame.font.SysFont('Segoe UI', 31)
         self.amber = False
         self.subtitle = None
-        self.footer = "SPACE / ENTER  WAKE OR INTERRUPT     T  PALETTE     ESC  QUIT"
+        self.footer = "SPACE / ENTER  WAKE     T  PALETTE     ESC  QUIT"
         self.points = []
         count = 300
         for i in range(count):

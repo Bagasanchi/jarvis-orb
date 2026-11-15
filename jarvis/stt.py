@@ -1,66 +1,57 @@
+"""Cancellable recognition with audio handoff from an interrupted response."""
+from collections import deque
 import json
 import time
+
 from vosk import Model, KaldiRecognizer
-from jarvis.config import SAMPLE_RATE, VAD_SILENCE_DURATION, MAX_SPEECH_DURATION, MODEL_DIR
+from jarvis.config import SAMPLE_RATE, MAX_SPEECH_DURATION, MODEL_DIR
+from jarvis import settings
+from jarvis.audio import input_stream, rms
 
 
 class Listener:
-    BLOCK_MS = 50
-    BLOCK_SIZE = int(BLOCK_MS * SAMPLE_RATE / 1000)
+    BLOCK_SIZE = int(SAMPLE_RATE * .05)
 
     def __init__(self):
-        model_path = MODEL_DIR
-        print(f"Loading Vosk model from {model_path}...")
-        self.model = Model(model_path)
+        self.model = Model(MODEL_DIR)
         self.rec = KaldiRecognizer(self.model, SAMPLE_RATE)
+        self.prefix = deque()
 
-    def listen(self) -> str:
-        """Record until silence, return transcript."""
-        import sounddevice as sd
-        import numpy as np
+    def feed_prefix(self, chunks):
+        self.prefix.extend(chunks)
 
-        def rms(chunk):
-            return float(((chunk.astype(float) / 32768.0) ** 2).mean() ** 0.5)
-
-        print("Listening for your command...")
+    def listen(self, stop_event=None):
         self.rec.Reset()
         segments = []
-        t_start = time.monotonic()
-        silent_after_speech = None
+        started = time.monotonic()
+        silence = None
         has_speech = False
-
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16', blocksize=self.BLOCK_SIZE) as stream:
-            while time.monotonic() - t_start < MAX_SPEECH_DURATION:
-                try:
-                    raw, overflow = stream.read(self.BLOCK_SIZE)
-                except Exception as e:
-                    print(f"[STT] Stream error: {e}")
-                    break
-
-                chunk = np.frombuffer(raw, dtype=np.int16)
-                r = rms(chunk)
-                if self.rec.AcceptWaveform(chunk.tobytes()):
-                    segment = json.loads(self.rec.Result()).get("text", "").strip()
+        threshold = settings.get('speech_threshold')
+        duration = settings.get('silence_seconds')
+        with input_stream() as stream:
+            while time.monotonic()-started < MAX_SPEECH_DURATION:
+                if stop_event is not None and stop_event.is_set():
+                    return ''
+                if self.prefix:
+                    raw = self.prefix.popleft()
+                else:
+                    raw, _ = stream.read(self.BLOCK_SIZE)
+                    raw = bytes(raw)
+                if self.rec.AcceptWaveform(raw):
+                    segment = json.loads(self.rec.Result()).get('text', '').strip()
                     if segment:
                         segments.append(segment)
                         break
-
-                if r > 0.008:
-                    has_speech = True
-                    silent_after_speech = None
-                else:
-                    if has_speech and silent_after_speech is None:
-                        silent_after_speech = time.monotonic()
-                    if has_speech and silent_after_speech is not None:
-                        elapsed = time.monotonic() - silent_after_speech
-                        if elapsed >= VAD_SILENCE_DURATION:
-                            break
-
-        result = json.loads(self.rec.FinalResult())
-        final = (result.get("text") or "").strip()
+                if rms(raw) >= threshold:
+                    has_speech, silence = True, None
+                elif has_speech:
+                    if silence is None:
+                        silence = time.monotonic()
+                    if time.monotonic()-silence >= duration:
+                        break
+        final = json.loads(self.rec.FinalResult()).get('text', '').strip()
         if final:
             segments.append(final)
-        text = " ".join(segments)
-        if text:
-            print(f"USER said: '{text}'")
-        return text
+        # Any unused prefix belongs to this utterance, never the next one.
+        self.prefix.clear()
+        return ' '.join(segments)

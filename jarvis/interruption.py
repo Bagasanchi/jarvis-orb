@@ -1,61 +1,78 @@
-"""Listen locally for a stop phrase only while Jarvis audio is playing."""
+"""Local stop phrases and opt-in natural barge-in with buffered audio handoff."""
+from collections import deque
 import json
-import os
 import threading
+import time
 
 from jarvis.config import SAMPLE_RATE
+from jarvis.audio import input_stream
+from jarvis import settings
 
-STOP_PHRASES = frozenset(("jarvis stop", "stop jarvis", "stop talking", "stop"))
+STOP_PHRASES = frozenset(('jarvis stop', 'stop jarvis', 'stop talking', 'stop'))
 
 
 def is_stop_phrase(text):
-    return " ".join(text.lower().split()) in STOP_PHRASES
+    return ' '.join(text.lower().split()) in STOP_PHRASES
 
 
 class VoiceInterruption:
-    def __init__(self, speaker, model, enabled=None):
-        self.speaker = speaker
-        self.model = model
-        self.enabled = os.getenv("JARVIS_VOICE_INTERRUPT", "1") != "0" if enabled is None else enabled
+    def __init__(self, speaker, model, enabled=None, listener=None):
+        self.speaker, self.model, self.listener = speaker, model, listener
+        self.enabled = settings.get('voice_interrupt') if enabled is None else enabled
+        self.natural = settings.get('natural_interrupt')
         self.done = threading.Event()
         self.thread = None
 
     def __enter__(self):
         if self.enabled:
-            self.thread = threading.Thread(target=self._run, daemon=True, name="jarvis-stop-phrase")
+            self.thread = threading.Thread(target=self._run, daemon=True, name='jarvis-stop-phrase')
             self.thread.start()
         return self
 
     def __exit__(self, *_):
         self.done.set()
         if self.thread:
-            # The input stream is owned by this thread and released before
-            # the conversation listener opens its own input stream.
             self.thread.join(timeout=2)
             if self.thread.is_alive():
-                raise RuntimeError("Stop-phrase microphone did not close; restart Jarvis")
+                raise RuntimeError('Microphone monitor did not close; restart Jarvis')
 
     def _run(self):
+        from vosk import KaldiRecognizer
         try:
-            import sounddevice as sd
-            from vosk import KaldiRecognizer
             while not self.done.is_set():
-                if self.speaker.playing.wait(timeout=0.03):
+                if self.speaker.playing.wait(.03):
                     break
             if self.done.is_set():
                 return
-            rec = KaldiRecognizer(self.model, SAMPLE_RATE, json.dumps(sorted(STOP_PHRASES) + ["[unk]"]))
-            block = int(SAMPLE_RATE * 0.05)
-            with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=block) as stream:
-                while not self.done.is_set() and self.speaker.playing.is_set():
-                    raw, overflow = stream.read(block)
-                    if self.done.is_set() or not self.speaker.playing.is_set():
+            if self.natural:
+                rec = KaldiRecognizer(self.model, SAMPLE_RATE)
+            else:
+                rec = KaldiRecognizer(self.model, SAMPLE_RATE, json.dumps(sorted(STOP_PHRASES) + ['[unk]']))
+            # Keep the beginning of the correction so users need not repeat it.
+            buffered = deque(maxlen=100)
+            heard_since = None
+            with input_stream() as stream:
+                while not self.done.is_set():
+                    raw, _ = stream.read(int(SAMPLE_RATE*.05))
+                    if self.done.is_set():
                         break
-                    complete = rec.AcceptWaveform(raw.tobytes())
+                    raw = bytes(raw)
+                    if not self.speaker.playing.is_set():
+                        buffered.clear(); heard_since = None
+                        rec.Reset()
+                        continue
+                    buffered.append(raw)
+                    complete = rec.AcceptWaveform(raw)
                     result = json.loads(rec.Result() if complete else rec.PartialResult())
-                    if is_stop_phrase(result.get("text", result.get("partial", ""))):
+                    text = result.get('text', result.get('partial', '')).strip()
+                    stop = is_stop_phrase(text)
+                    meaningful = self.natural and len(text.split()) >= 3
+                    if meaningful and heard_since is None:
+                        heard_since = time.monotonic()
+                    if stop or (meaningful and time.monotonic()-heard_since >= .35):
+                        if self.natural and not stop and self.listener:
+                            self.listener.feed_prefix(list(buffered))
                         self.speaker.interrupt()
-                        print("[JARVIS] Voice interruption detected. Listening again.")
                         break
         except Exception as error:
-            print(f"[Voice interruption unavailable: {type(error).__name__}] Space/Enter still stops speech.")
+            print('[Voice monitor unavailable]', type(error).__name__, '- keyboard interruption remains available.')

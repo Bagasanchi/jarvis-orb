@@ -24,16 +24,15 @@ class FaceTests(unittest.TestCase):
 
     def test_continuous_worker_and_shutdown(self):
         state = face.FaceState()
+        state.wake.set()
         assistant = Mock()
-        assistant.wake.is_double_clap.return_value = True
         turns = iter(['hello', 'another question'])
-        def listen():
+        def listen(**kwargs):
             result = next(turns)
             if result == 'another question':
                 state.stop.set()
             return result
         assistant.listener.listen.side_effect = listen
-        assistant.handle_user_text.return_value = 'Hello, sir.'
         stream = Mock()
         stream.__enter__ = Mock(return_value=stream)
         stream.__exit__ = Mock(return_value=False)
@@ -47,8 +46,9 @@ class FaceTests(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             face.assistant_worker(state)
         self.assertEqual(assistant.listener.listen.call_count, 2)
-        assistant.handle_user_text.assert_called_once_with('hello')
-        self.assertEqual(assistant.speaker.say.call_count, 2)
+        assistant.respond.assert_called_once()
+        self.assertEqual(assistant.respond.call_args.args[0], 'hello')
+        assistant.speak.assert_called_once()
         assistant.shutdown.assert_called_once()
         modes = []
         while not state.events.empty():

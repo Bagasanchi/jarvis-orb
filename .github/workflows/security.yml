@@ -1,0 +1,21 @@
+name: Security checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pip-audit bandit detect-secrets
+      - name: Scan tracked text throughout Git history
+        run: python scripts/check_secrets.py --history
+      - name: Check medium and high severity code findings
+        run: python -m bandit -r jarvis scripts -ll
+      - name: Audit resolved application dependencies
+        run: python -m pip_audit -r requirements.txt
