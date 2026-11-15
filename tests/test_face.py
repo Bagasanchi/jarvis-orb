@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from contextlib import nullcontext
 from unittest.mock import Mock, patch
 
 from jarvis import face
@@ -38,6 +39,7 @@ class FaceTests(unittest.TestCase):
         stream.__exit__ = Mock(return_value=False)
         stream.read.return_value = (b'pcm', False)
         modules = {
+            'jarvis.interruption': types.SimpleNamespace(VoiceInterruption=lambda *args: nullcontext()),
             'jarvis.main': types.SimpleNamespace(JarvisAssistant=lambda: assistant),
             'jarvis.config': types.SimpleNamespace(SAMPLE_RATE=16000),
             'sounddevice': types.SimpleNamespace(InputStream=lambda **kwargs: stream),

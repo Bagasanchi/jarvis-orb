@@ -2,7 +2,7 @@ import os
 os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import pygame
 from jarvis.face import FaceState, FaceWindow
 
@@ -34,6 +34,16 @@ class OrbTests(unittest.TestCase):
         self.assertTrue(self.window.state.wake.is_set())
         self.assertTrue(self.window.state.stop.is_set())
         self.assertTrue(self.window.renderer.amber)
+
+    def test_space_interrupts_active_reply_instead_of_waking(self):
+        speaker = Mock()
+        speaker.interrupt.return_value = True
+        self.window.state.speaker = speaker
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN,key=pygame.K_SPACE))
+        pygame.event.post(pygame.event.Event(pygame.QUIT))
+        self.window.run(seconds=1)
+        speaker.interrupt.assert_called()
+        self.assertFalse(self.window.state.wake.is_set())
 
 
 if __name__ == '__main__':

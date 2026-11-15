@@ -44,13 +44,24 @@ The terminal interface remains available with `python -m jarvis`.
 
 | Control | Action |
 | --- | --- |
-| Double clap, Space or Enter | Wake the assistant |
+| Double clap | Wake the assistant |
+| Space or Enter | Wake, or interrupt the current spoken reply |
+| "Jarvis stop", "stop talking", or "stop" | Interrupt speech using local recognition |
 | T | Switch cyan / amber palette |
 | Esc or close window | Quit the graphical assistant |
 | Ctrl+C | Quit from the terminal |
 
 Space and Enter work when the window has focus. After waking, the assistant
-listens again after each reply. It does not listen while speaking.
+listens again after each reply. A stop-phrase listener runs during audio playback.
+After interrupting, wait for **LISTENING** before asking your next question.
+Space/Enter also cancels a voice reply while it is being prepared. AI requests
+already in progress are not cancelled by these keys.
+
+Voice interruption uses Vosk locally and is not acoustic echo cancellation.
+Headphones are recommended: on speakers, Jarvis's own voice can be picked up
+and mistaken for a stop phrase. Set `JARVIS_VOICE_INTERRUPT=0` to disable the
+voice trigger while keeping keyboard interruption. If microphone monitoring
+fails, keyboard interruption remains available.
 
 ## Local and cloud answers
 

@@ -22,6 +22,10 @@ class FaceState:
         self.events = queue.SimpleQueue()
         self.stop = threading.Event()
         self.wake = threading.Event()
+        self.speaker = None
+
+    def interrupt_speech(self):
+        return bool(self.speaker is not None and self.speaker.interrupt())
 
     def update(self, state, detail="", transcript=None, reply=None):
         self.events.put((state, detail, transcript, reply))
@@ -32,10 +36,16 @@ def assistant_worker(state):
     try:
         from jarvis.main import JarvisAssistant
         from jarvis.config import SAMPLE_RATE
+        from jarvis.interruption import VoiceInterruption
         import sounddevice as sd
 
         state.update("starting", "Loading speech recognition and AI connections")
         assistant = JarvisAssistant()
+        state.speaker = assistant.speaker
+
+        def speak(text):
+            with VoiceInterruption(assistant.speaker, assistant.listener.model):
+                assistant.speaker.say(text)
         state.update("idle", "Clap twice, or press SPACE to begin")
         # Release the wake microphone before opening speech recognition.
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
@@ -52,7 +62,7 @@ def assistant_worker(state):
             return
         # The display checks actual mixer playback before animating speech.
         state.update("thinking", "Preparing voice", reply=greeting)
-        assistant.speaker.say(greeting)
+        speak(greeting)
         while not state.stop.is_set():
             state.update("listening", "Speak naturally. I'll listen again after answering.")
             text = assistant.listener.listen()
@@ -65,7 +75,7 @@ def assistant_worker(state):
             if state.stop.is_set():
                 break
             state.update("thinking", "Preparing voice", reply=answer)
-            assistant.speaker.say(answer)
+            speak(answer)
     except Exception as error:
         traceback.print_exc()
         state.update("error", type(error).__name__ + ": " + str(error)[:180])
@@ -145,7 +155,8 @@ class FaceWindow:
                         self.state.stop.set()
                     elif event.type == pygame.KEYDOWN:
                         if event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                            self.state.wake.set()
+                            if not self.state.interrupt_speech():
+                                self.state.wake.set()
                         elif event.key == pygame.K_t:
                             self.renderer.amber = not self.renderer.amber
                 if self.demo:
@@ -159,6 +170,7 @@ class FaceWindow:
                 clock.tick(30)
         finally:
             self.state.stop.set()
+            self.state.interrupt_speech()
             pygame.display.quit()
 
 
