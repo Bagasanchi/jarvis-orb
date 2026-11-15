@@ -16,6 +16,8 @@ jobs:
       - name: Scan tracked text throughout Git history
         run: python scripts/check_secrets.py --history
       - name: Check medium and high severity code findings
+        if: ${{ !cancelled() }}
         run: python -m bandit -r jarvis scripts -ll
       - name: Audit resolved application dependencies
+        if: ${{ !cancelled() }}
         run: python -m pip_audit -r requirements.txt
