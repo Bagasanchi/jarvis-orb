@@ -2,6 +2,7 @@
 import os
 import re
 import json
+import threading
 
 import requests
 from openai import OpenAI
@@ -23,6 +24,32 @@ class Brain:
         self.ollama_model = os.getenv("JARVIS_OLLAMA_MODEL", "qwen3.5:2b")
         self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.last_backend = None
+        self.current_backend = None
+        self._history_lock = threading.RLock()
+        self._history_generation = 0
+
+    def clear_history(self):
+        with self._history_lock:
+            self._history_generation += 1
+            self.history = self.history[:1]
+
+    def restore_history(self, history, generation):
+        with self._history_lock:
+            if generation != self._history_generation:
+                return False
+            self.history = history
+            return True
+
+    def _context(self, text):
+        with self._history_lock:
+            return self._messages(text), self._history_generation
+
+    def _commit(self, messages, answer, generation, cancel=None):
+        with self._history_lock:
+            if generation != self._history_generation or (cancel is not None and cancel.is_set()):
+                return False
+            self.history = [self.history[0]] + messages[1:] + [{'role': 'assistant', 'content': answer}]
+            return True
 
     def _messages(self, text):
         messages = [dict(self.history[0])] + self.history[1:][-8:]
@@ -33,6 +60,7 @@ class Brain:
         return messages + [{'role': 'user', 'content': text}]
 
     def _stream_backend(self, backend, messages, cancel):
+        self.current_backend = backend
         if backend == 'local':
             with requests.post(self.ollama_url + '/api/chat', json={
                 'model': self.ollama_model, 'messages': messages, 'stream': True,
@@ -71,7 +99,7 @@ class Brain:
         if not text:
             yield 'Please include a question after use local or use cloud, sir.'
             return
-        messages = self._messages(text)
+        messages, generation = self._context(text)
         attempts = [backend] if explicit else [backend, 'cloud' if backend == 'local' else 'local']
         for selected in attempts:
             pieces = []
@@ -84,7 +112,7 @@ class Brain:
                 if cancel.is_set():
                     return
                 answer = self._answer_text(''.join(pieces))
-                self.history = [self.history[0]] + messages[1:] + [{'role': 'assistant', 'content': answer}]
+                self._commit(messages, answer, generation, cancel)
                 self.last_backend = selected
                 return
             except Exception as error:
@@ -117,6 +145,7 @@ class Brain:
         return value.strip()
 
     def _local(self, messages):
+        self.current_backend = 'local'
         response = requests.post(
             self.ollama_url + "/api/chat",
             json={"model": self.ollama_model, "messages": messages,
@@ -128,6 +157,7 @@ class Brain:
         return self._answer_text(response.json()["message"]["content"])
 
     def _cloud(self, messages):
+        self.current_backend = 'cloud'
         if not LLM_API_KEY:
             raise RuntimeError("Set JARVIS_CLOUD_API_KEY to enable cloud requests")
         response = self.client.chat.completions.create(
@@ -141,14 +171,14 @@ class Brain:
         if not text:
             return "Please include a question after use local or use cloud, sir."
         # Keep complete user/assistant pairs, with the system prompt intact.
-        messages = self._messages(text)
+        messages, generation = self._context(text)
         # An explicit local request never leaves the machine if Ollama fails.
         attempts = [backend] if explicit else [backend, "cloud" if backend == "local" else "local"]
         for selected in attempts:
             print(f"[Brain] Using {selected} ({self.ollama_model if selected == 'local' else LLM_MODEL})")
             try:
                 answer = self._local(messages) if selected == "local" else self._cloud(messages)
-                self.history = [self.history[0]] + messages[1:] + [{"role": "assistant", "content": answer}]
+                self._commit(messages, answer, generation)
                 self.last_backend = selected
                 return answer
             except Exception as error:

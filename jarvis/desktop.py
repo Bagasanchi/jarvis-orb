@@ -138,8 +138,6 @@ class Desktop:
         match = re.match(r'^(?:take a note|save a note|note)\s*[:,-]?\s+(.+)$', text, re.I)
         if match:
             return f'Saved note {memory.add(match[1], "note")}.'
-        if lower in ('read my notes', 'list notes', 'my notes'):
-            return ' '.join(f'Note {i}: {t}' for i, t in memory.list('note')) or 'No saved notes.'
         match = re.match(r'^(?:find file|find a file|search files for)\s+(.+)$', text, re.I)
         if match:
             return self.search_files(match[1].strip(' .!?'))

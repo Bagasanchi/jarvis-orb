@@ -1,10 +1,27 @@
 # Jarvis Orb
 
-A Windows voice assistant with an animated network sphere, local Ollama chat,
+A desktop voice assistant with an animated network sphere, local Ollama chat,
 optional cloud AI, and sentence-streamed speech. Say **Hey Jarvis** or press
 **Space / Enter** to begin. Clap activation has been removed.
 
-## Setup
+## Mac download
+
+[Download Jarvis for macOS](https://github.com/Bagasanchi/jarvis-orb/raw/refs/heads/main/downloads/Jarvis-macOS.zip). Install Python 3.12
+with Tk from python.org, unzip the package into a writable folder, then open
+Terminal in the extracted Jarvis folder and run `./Start_Jarvis.command`.
+The first launch installs dependencies into a private virtual environment.
+Use the same command for subsequent launches. In Settings, download the
+English speech model and select your microphone. For local AI, install
+Ollama for macOS and run `ollama pull qwen3.5:2b`. Grant microphone access
+when prompted and screen recording access only if you use screen analysis.
+
+The launcher stores settings and memories in `~/Library/Application Support/Jarvis`.
+Mac users can select Edge speech (online) or configure Piper separately.
+Windows tray, app shortcuts, Windows voice and media keys are Windows features.
+The Mac package is an unsigned source distribution and needs live Mac testing.
+To recreate it, run `python scripts/build_macos.py`.
+
+## Windows setup
 
 Use Python 3.12 or newer with tkinter. Python 3.14 is tested locally.
 Double-click `Setup_Jarvis.cmd`, then `Start_Jarvis_Face.cmd`, or run:
@@ -28,6 +45,9 @@ Install [Ollama](https://ollama.com/download/windows), start it, and run
 | Hey Jarvis | Wake from standby using local Vosk recognition |
 | Space / Enter | Begin, interrupt a reply, or retry after an input error |
 | F2 | Settings; conversation input pauses while Settings is open |
+| F3 | Conversation history, typed requests, corrections, project shortcuts |
+| F4 | Hide the orb to the Windows tray (minimize if tray unavailable) |
+| M | Mute/unmute the microphone; typed requests still work |
 | T | Switch cyan / amber palette |
 | Esc / close window | Quit |
 | Go to sleep / stop listening | Return to standby |
@@ -68,20 +88,53 @@ Text streams from Ollama or the gateway. Jarvis speaks complete sentences while
 later text is generated. Each sentence is synthesized before playback; this is
 sentence streaming rather than raw audio streaming.
 
-**Speakers mode is the default.** Microphone listening pauses during Jarvis's
-reply and for 0.4 seconds after playback, so its voice cannot interrupt itself.
-Use **Space/Enter** to interrupt, then speak when LISTENING appears. Select
-speakers/headphones in F2 Settings. This is half-duplex operation, not echo cancellation.
+**Speakers mode is the default.** Experimental echo cancellation uses the actual
+playback audio, estimates acoustic delay, and adapts a filter for room reflections.
+Say **Jarvis stop** during a reply. Natural interruption remains an optional
+setting. This is not guaranteed across every room, volume level, and audio driver;
+live testing on your laptop is necessary. If it triggers falsely, disable echo
+cancellation in F2 to restore half-duplex operation and use **Space/Enter**.
+If playback cannot supply a reference, voice interruption fails closed. Jarvis
+waits 0.4 seconds for the remaining speaker echo before listening again.
 
 In **headphones mode**, say **Jarvis stop**, **stop talking**, **stop Jarvis**,
 or **stop** to interrupt. Space/Enter also cancels speech preparation and queued text. A network request
 may remain open until its read timeout, but cancelled output cannot play in a
 later turn. Interrupted conversation history marks the response as incomplete.
 
-**Natural interruption** is experimental and only runs in headphones mode. Use headphones
-and say a correction of at least three words. Jarvis stops and passes buffered
-microphone audio into its next recognition turn. There is no acoustic echo
-cancellation; speaker playback or background conversation can cause false triggers.
+**Natural interruption** is experimental. Say a correction of at least three
+words. Jarvis stops and passes buffered microphone audio into its next recognition
+turn. Speakers use the playback-reference filter; headphones do not need it.
+Background voices or difficult acoustics can still cause false triggers.
+
+## Conversation, tray and project shortcuts
+
+F3 opens an in-memory conversation panel. Type a request and press Enter, or use
+Edit last request to correct and resend recognized text. Resending does not undo
+an action already performed. History is limited to the last 100 exchanges and
+is not written to disk. The panel also shows Ollama availability, cloud configuration
+(not a cloud connectivity guarantee), last attempted AI backend, voice, and echo status.
+
+On Windows, right-click the Jarvis tray icon to show the orb or conversation
+panel, mute/unmute the microphone, or quit. Closing the orb hides it when the tray
+is available; Esc quits. If Windows cannot create a tray icon, closing quits and
+F4 minimizes normally. Muting disables microphone input, including wake phrases
+and voice interruption, while typed requests remain available.
+
+Choose Add project shortcut in F3, give the project a nickname, select its folder,
+and choose explorer, vscode or godot. Then say “open my Jarvis” or “open my Jarvis
+in VS Code.” Select your trusted Godot .exe in F2 before launching Godot projects.
+Shortcuts are saved privately in data/workspaces.json. Only saved folder names
+and fixed editor arguments are accepted; voice cannot register executables.
+
+Deleting saved items or all memories now requires a local confirmation. Sending
+a screenshot to cloud AI also requires confirmation before capture; the dialog
+shows the destination host. Only a click or keyboard response can approve, never
+spoken “yes” or model output. Console mode requires typing YES. Missing UI, denial,
+timeout or shutdown cancels approval.
+Interrupting a reply also invalidates its pending approval. Confirmed “forget
+everything” clears saved items, AI history, the visible transcript and correction
+input. Replies from older turns cannot restore that cleared conversation.
 
 ## Voices
 
@@ -125,7 +178,9 @@ Screen analysis captures only when requested, keeps the image in memory, and
 uses local Ollama by default. Select an installed vision-capable model in
 Settings; ordinary chat models are not assumed to support images. Cloud vision
 also requires `JARVIS_CLOUD_VISION_MODEL` and the explicit use-cloud command.
-There is no automatic screenshot upload or cloud vision fallback.
+An Ollama server configured on another machine also requires local approval
+before capture. Jarvis shows its host and port. On-device Ollama screen analysis
+stays hands-free. Reading saved notes aloud requires one local approval.
 
 Recognition and wake phrases are local. Edge TTS sends speech text online,
 weather uses wttr.in, and cloud chat sends recent history plus saved facts.

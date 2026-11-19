@@ -1,8 +1,9 @@
 # Security and privacy
 
 This personal Windows assistant is not a security boundary. Anyone audible to
-its microphone can issue supported voice commands, including deleting saved
-items. Wake phrases do not authenticate a speaker. Avoid running as administrator.
+its microphone can issue supported voice commands. Deleting saved items and cloud
+screen capture require local keyboard/mouse approval. Wake phrases do not
+authenticate a speaker. Avoid running as administrator.
 
 Publish reviewed source only. Never distribute your working folder: `data/`
 contains settings, unencrypted saved memories, optional microphone recordings,
@@ -14,9 +15,16 @@ revoke exposed credentials before cleaning history.
 Recognition runs locally. Edge TTS sends reply text online. Cloud chat can send
 recent conversation and saved facts automatically under the documented routing
 rules. Use `use local` and Windows/Piper speech for offline conversations.
-Screen capture happens on request; cloud screen analysis requires `use cloud`.
+Screen capture happens on request. Cloud vision and off-device Ollama require
+local approval before capture. Reading saved notes also requires local approval.
 Voice commands can be misrecognized, so check visible content before requesting
 screen analysis. Cloud URLs should use HTTPS outside the local machine.
+
+Project shortcuts refer only to folders saved through the local panel and fixed
+editor choices. Select trusted Godot executables and projects: editor plugins and
+Godot tool scripts can execute with your user permissions when a project opens.
+The microphone mute control covers wake recognition and voice interruption.
+Echo cancellation is an experimental audio feature, not speaker authentication.
 
 Application launches use fixed allowlisted commands. Model text is never
 executed as shell code. Filename search does not read matching files. Downloaded

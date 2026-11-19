@@ -10,6 +10,8 @@ import sys
 
 import pygame
 from jarvis.orb import OrbRenderer
+from jarvis.confirmation import Confirmations
+from jarvis.history import History
 
 COLORS = {"idle": (74, 133, 164), "listening": (70, 232, 214),
           "thinking": (181, 151, 255), "speaking": (87, 202, 255),
@@ -28,15 +30,52 @@ class FaceState:
         self.alerts = None
         self.retry = threading.Event()
         self.paused = threading.Event()
+        self.muted = threading.Event()
+        self.inputs = queue.Queue(maxsize=4)
+        self.commands = queue.SimpleQueue()
+        self.confirmations = Confirmations(self.stop)
+        self.history = History()
+        self.services = None
+
+    def submit(self, text):
+        text = text.strip()
+        if not text or len(text) > 4000:
+            return False
+        try:
+            self.inputs.put_nowait(text)
+        except queue.Full:
+            return False
+        self.interrupt_speech()
+        self.wake.set()
+        self.retry.set()
+        return True
+
+    def toggle_mute(self):
+        if self.muted.is_set():
+            self.muted.clear()
+            self.retry.set()
+        else:
+            self.muted.set()
+
+    def status_text(self):
+        return self.services.text() if self.services is not None else 'Services loading'
 
     def is_set(self):
-        return self.stop.is_set() or self.paused.is_set()
+        return self.stop.is_set() or self.paused.is_set() or self.muted.is_set() or not self.inputs.empty()
 
     def interrupt_speech(self):
         return bool(self.speaker is not None and self.speaker.interrupt())
 
     def update(self, state, detail="", transcript=None, reply=None):
         self.events.put((state, detail, transcript, reply))
+
+    def clear_conversation(self):
+        while True:
+            try:
+                self.events.get_nowait()
+            except queue.Empty:
+                break
+        self.update('thinking', 'Conversation cleared', transcript='', reply='')
 
 
 def assistant_worker(state):
@@ -50,6 +89,13 @@ def assistant_worker(state):
         assistant = JarvisAssistant()
         state.speaker = assistant.speaker
         state.alerts = assistant.desktop.alerts
+        assistant.confirm = state.confirmations.ask
+        assistant.history = state.history
+        assistant.on_history_clear = state.clear_conversation
+        assistant.listener.muted = state.muted
+        from jarvis.status import ServiceStatus
+        state.services = ServiceStatus(assistant, state.stop)
+        state.services.thread.start()
 
         def speak(text):
             assistant.speak(text)
@@ -57,12 +103,21 @@ def assistant_worker(state):
         def wait():
             state.update('idle', 'Say ' + settings.get('wake_phrase') + ', or press SPACE. F2 opens Settings.')
             while not state.stop.is_set():
+                if not state.inputs.empty():
+                    return True
+                if state.muted.is_set():
+                    state.stop.wait(.1)
+                    continue
                 if state.paused.wait(.05):
                     time.sleep(.05)
                     continue
                 try:
                     result = wait_for_wake(assistant.listener.model, state.wake, state)
                     if state.paused.is_set():
+                        continue
+                    if not state.inputs.empty():
+                        return True
+                    if state.muted.is_set():
                         continue
                     return result
                 except Exception:
@@ -81,34 +136,47 @@ def assistant_worker(state):
             return
         # The display checks actual mixer playback before animating speech.
         state.update("thinking", "Preparing voice", reply=greeting)
-        speak(greeting)
+        if state.inputs.empty():
+            speak(greeting)
         while not state.stop.is_set():
-            if state.paused.is_set():
+            if state.paused.is_set() or (state.muted.is_set() and state.inputs.empty()):
                 state.stop.wait(.1)
                 continue
             state.update("listening", "Speak naturally. I'll listen again after answering.")
             try:
-                text = assistant.listener.listen(stop_event=state)
+                try:
+                    text = state.inputs.get_nowait()
+                    source = 'typed'
+                    assistant.listener.prefix.clear()
+                except queue.Empty:
+                    text = assistant.listener.listen(stop_event=state)
+                    source = 'voice'
             except Exception:
                 state.update('error', 'Microphone unavailable. F2: choose/test a microphone. SPACE: retry.')
                 state.retry.clear()
-                while not state.stop.is_set() and not state.retry.wait(.1):
+                while not state.stop.is_set() and state.inputs.empty() and not state.retry.wait(.1):
                     pass
                 continue
             if state.is_set():
-                if state.paused.is_set():
+                if state.paused.is_set() or (source == 'voice' and (state.muted.is_set() or not state.inputs.empty())):
                     continue
-                break
+                if state.stop.is_set():
+                    break
             if not text:
                 continue
             state.update("thinking", "Choosing an answer", transcript=text, reply="")
+            turn = state.history.begin(text, source)
             if text.lower().strip(' .!?') in ('go to sleep', 'sleep jarvis', 'stop listening'):
                 speak('Standing by.')
                 state.wake.clear()
                 if not wait():
                     break
                 continue
-            assistant.respond(text, on_text=lambda answer: state.update('thinking', 'Preparing voice', reply=answer))
+            def answer_update(answer, turn_id=turn):
+                state.history.answer(turn_id, answer, on_update=lambda: state.update('thinking', 'Preparing voice', reply=answer))
+            complete = assistant.respond(text, on_text=answer_update)
+            if complete is False:
+                state.history.answer(turn, assistant.speaker.spoken_text + ' [Reply interrupted or unavailable.]')
     except Exception as error:
         traceback.print_exc()
         state.update("error", type(error).__name__ + ": " + str(error)[:180])
@@ -137,6 +205,47 @@ class FaceWindow:
         self.settings_process = None
         self.alert = ''
         self.alert_until = 0
+        self.panel = None
+        self.tray = None
+        self.hidden = False
+        self.renderer.footer = 'SPACE STOP   F2 SETTINGS   F3 CHAT   F4 HIDE   M MUTE   ESC QUIT'
+        if not demo:
+            self.open_panel(show=False)
+            from jarvis.tray import TrayIcon
+            self.tray = TrayIcon(state.commands)
+            if not self.tray.start():
+                self.tray = None
+
+    def open_panel(self, show=True):
+        try:
+            if self.panel is None:
+                from jarvis.panel import ControlPanel
+                self.panel = ControlPanel(self.state)
+                if not show:
+                    self.panel.root.withdraw()
+            if show:
+                self.panel.show()
+        except Exception:
+            self.state.update('error', 'Conversation panel unavailable. Check tkinter installation.')
+
+    def show_window(self, visible):
+        if not visible and self.tray is None:
+            pygame.display.iconify()
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = pygame.display.get_wm_info().get('window')
+            user = ctypes.WinDLL('user32')
+            user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+            user.ShowWindow(hwnd, 9 if visible else 0)
+            if visible:
+                user.SetForegroundWindow.argtypes = [wintypes.HWND]
+                user.SetForegroundWindow(hwnd)
+            self.hidden = not visible
+        except Exception:
+            if not visible:
+                pygame.display.iconify()
 
     def consume(self):
         if self.state.alerts is not None:
@@ -180,6 +289,11 @@ class FaceWindow:
             pygame.draw.rect(surface, (3, 9, 15), (120, 668, 520, 45))
             self.renderer.text("COMING ONLINE" if mode == "starting" else "NEEDS ATTENTION",
                                (380, 671), (247, 177, 77), self.renderer.large, center=True)
+        status_lines = self.state.status_text().split('\n', 1)
+        if self.state.muted.is_set():
+            status_lines[0] = 'MIC MUTED | ' + status_lines[0]
+        for row, line in enumerate(status_lines):
+            self.renderer.text(self.renderer.clip(line, 700), (380, 737+row*16), (124, 158, 172), self.renderer.medium, center=True)
         w, h = self.screen.get_size()
         scale = min(w/760, h/820)
         size = (max(1, int(760*scale)), max(1, int(820*scale)))
@@ -195,13 +309,27 @@ class FaceWindow:
             self.renderer.footer = "DEMO / NO MICROPHONE     T  PALETTE     ESC  QUIT"
         try:
             while not self.state.stop.is_set():
+                if self.panel is not None:
+                    self.panel.poll()
+                while not self.state.commands.empty():
+                    command = self.state.commands.get_nowait()
+                    if command == 'show':
+                        self.show_window(True)
+                    elif command == 'panel':
+                        self.open_panel()
+                    elif command == 'mute':
+                        self.state.toggle_mute()
+                    elif command == 'quit':
+                        self.state.stop.set()
                 if self.settings_process is not None and self.settings_process.poll() is not None:
                     self.state.paused.clear()
                     self.state.retry.set()
                     self.settings_process = None
                 elapsed = time.monotonic()-self.started
                 for event in pygame.event.get():
-                    if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                    if event.type == pygame.QUIT and self.tray is not None:
+                        self.show_window(False)
+                    elif event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                         self.state.stop.set()
                     elif event.type == pygame.KEYDOWN:
                         if event.key in (pygame.K_SPACE, pygame.K_RETURN):
@@ -221,6 +349,12 @@ class FaceWindow:
                                     self.state.update('error', 'Could not open Settings. Run python -m jarvis.setup.')
                         elif event.key == pygame.K_t:
                             self.renderer.amber = not self.renderer.amber
+                        elif event.key == pygame.K_F3:
+                            self.open_panel()
+                        elif event.key == pygame.K_F4:
+                            self.show_window(False)
+                        elif event.key == pygame.K_m:
+                            self.state.toggle_mute()
                 if self.demo:
                     self.detail = "Preview: no microphone or AI connection"
                     self.reply = "Hello, sir. How can I help you today?"
@@ -233,6 +367,10 @@ class FaceWindow:
         finally:
             self.state.stop.set()
             self.state.interrupt_speech()
+            if self.tray is not None:
+                self.tray.close()
+            if self.panel is not None:
+                self.panel.close()
             pygame.display.quit()
 
 

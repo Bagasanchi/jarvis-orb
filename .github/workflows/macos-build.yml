@@ -1,0 +1,28 @@
+name: macOS source download
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/build_macos.py
+      - name: Launch the extracted download in demo mode
+        run: |
+          unzip -q dist/Jarvis-macOS.zip -d "$RUNNER_TEMP/jarvis-download"
+          cd "$RUNNER_TEMP/jarvis-download/Jarvis"
+          ./Start_Jarvis.command --demo --seconds 2
+        env:
+          SDL_AUDIODRIVER: dummy
+          SDL_VIDEODRIVER: dummy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-macOS
+          path: dist/Jarvis-macOS.zip

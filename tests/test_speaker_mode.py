@@ -24,7 +24,7 @@ class SpeakerModeTests(unittest.TestCase):
 
     def test_old_natural_interruption_setting_cannot_open_mic_in_speaker_mode(self):
         # Old installations have no audio_output key and may enable both triggers.
-        (Path(self.temp.name)/'settings.json').write_text('{"natural_interrupt":true,"voice_interrupt":true}')
+        (Path(self.temp.name)/'settings.json').write_text('{"natural_interrupt":true,"voice_interrupt":true,"echo_cancellation":false}')
         speaker = Mock()
         with patch('jarvis.interruption.VoiceInterruption') as monitor, patch('sounddevice.InputStream') as mic:
             with speech_session(speaker, Mock()):
@@ -34,7 +34,7 @@ class SpeakerModeTests(unittest.TestCase):
         speaker.wait_for_quiet.assert_called_once()
 
     def test_greeting_and_streamed_reply_both_use_speaker_mode(self):
-        settings.save({'audio_output': 'speakers', 'natural_interrupt': True})
+        settings.save({'audio_output': 'speakers', 'natural_interrupt': True, 'echo_cancellation': False})
         assistant = object.__new__(main.JarvisAssistant)
         assistant.listener = types.SimpleNamespace(model=Mock())
         assistant.brain = types.SimpleNamespace(history=[])

@@ -14,6 +14,7 @@ import edge_tts
 import pygame
 from jarvis.config import TTS_VOICE, CACHE_DIR
 from jarvis import settings
+from jarvis.echo import PlaybackReference
 
 
 def split_sentences(buffer, final=False):
@@ -53,6 +54,8 @@ class Speaker:
         self.last_playback_ended = None
         self._speech_lock = threading.Lock()
         self._turn_cancel = threading.Event()
+        self.reference = PlaybackReference()
+        self.echo_status = 'waiting'
 
     async def _generate_audio(self, text):
         await edge_tts.Communicate(text, os.getenv('JARVIS_TTS_VOICE', TTS_VOICE)).save(self.temp_file)
@@ -92,10 +95,10 @@ class Speaker:
         if remaining > 0:
             self.closed.wait(remaining)
 
-    def _process(self, args, text):
+    def _process(self, args, text, **options):
         process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), **options)
         try:
             process.stdin.write(text)
             process.stdin.close()
@@ -114,31 +117,49 @@ class Speaker:
     def _windows(self, text):
         if os.name != 'nt':
             raise RuntimeError('Windows speech is unavailable on this OS')
+        output = str(Path(self.temp_file).with_suffix('.wav'))
         script = ("$ErrorActionPreference='Stop'; "
                   "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; "
                   "Add-Type -AssemblyName System.Speech; "
                   "$voice=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                  "try {$voice.Speak([Console]::In.ReadToEnd())} finally {$voice.Dispose()}")
+                  "try {$voice.SetOutputToWaveFile($env:JARVIS_SPEECH_FILE); "
+                  "$voice.Speak([Console]::In.ReadToEnd())} finally {$voice.Dispose()}")
         self.last_backend = 'windows'
-        self.playing.set()
         try:
-            return self._process(['powershell.exe', '-NoProfile', '-NonInteractive',
-                                  '-WindowStyle', 'Hidden', '-Command', script], text)
+            if not self._process(['powershell.exe', '-NoProfile', '-NonInteractive',
+                                  '-WindowStyle', 'Hidden', '-Command', script], text,
+                                  env={**os.environ, 'JARVIS_SPEECH_FILE': output}):
+                return False
+            return self._play_file(output)
         finally:
-            self.last_playback_ended = time.monotonic()
-            self.playing.clear()
+            Path(output).unlink(missing_ok=True)
 
-    def _play_file(self):
+    def _play_file(self, filename=None):
         loaded = False
         try:
             if self._cancelled():
                 return False
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
-            pygame.mixer.music.load(self.temp_file)
+            filename = filename or self.temp_file
+            pygame.mixer.music.load(filename)
             loaded = True
             if self._cancelled():
                 return False
+            try:
+                import numpy as np
+                audio = pygame.sndarray.array(pygame.mixer.Sound(filename)).astype(float)
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                rate, bits, _ = pygame.mixer.get_init()
+                audio /= float(2 ** (abs(bits)-1))
+                positions = np.arange(int(len(audio)*16000/rate)) * rate/16000
+                samples = np.interp(positions, np.arange(len(audio)), audio)
+                self.reference.start(samples)
+                self.echo_status = 'learning'
+            except Exception:
+                self.reference.clear()
+                self.echo_status = 'unavailable: keyboard stop available'
             pygame.mixer.music.play()
             self.playing.set()
             while pygame.mixer.music.get_busy():
@@ -150,6 +171,7 @@ class Speaker:
             if self.playing.is_set():
                 self.last_playback_ended = time.monotonic()
             self.playing.clear()
+            self.reference.clear()
             if loaded:
                 try:
                     pygame.mixer.music.stop()

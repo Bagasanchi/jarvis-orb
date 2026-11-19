@@ -2,6 +2,7 @@
 from collections import deque
 import json
 import time
+import threading
 
 from vosk import Model, KaldiRecognizer
 from jarvis.config import SAMPLE_RATE, MAX_SPEECH_DURATION, MODEL_DIR
@@ -16,6 +17,7 @@ class Listener:
         self.model = Model(MODEL_DIR)
         self.rec = KaldiRecognizer(self.model, SAMPLE_RATE)
         self.prefix = deque()
+        self.muted = threading.Event()
 
     def feed_prefix(self, chunks):
         self.prefix.extend(chunks)

@@ -18,6 +18,7 @@ DEFAULTS = {
     'wake_phrase': 'hey jarvis', 'wake_enabled': True,
     'voice_interrupt': True, 'natural_interrupt': False,
     'audio_output': 'speakers', 'speaker_tail_seconds': 0.4,
+    'echo_cancellation': True, 'godot_executable': '',
     'tts_backend': 'auto', 'piper_model': '',
     'vision_model': '', 'file_search_root': str(Path.home() / 'Documents'),
 }

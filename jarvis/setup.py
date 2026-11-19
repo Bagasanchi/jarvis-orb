@@ -115,10 +115,12 @@ def gui():
     field('Piper voice model (optional)', 'piper_model')
     field('Ollama vision model (optional)', 'vision_model')
     field('Filename search folder', 'file_search_root')
+    field('Godot executable (trusted .exe)', 'godot_executable')
     form.columnconfigure(1, weight=1)
     for key, label in [('wake_enabled', 'Enable wake phrase (otherwise press Space)'),
-                       ('voice_interrupt', 'Voice stop phrases during speech (headphones mode only)'),
-                       ('natural_interrupt', 'Natural interruption (headphones mode only)')]:
+                       ('echo_cancellation', 'Experimental speaker echo cancellation (disable for keyboard-only stop)'),
+                       ('voice_interrupt', 'Voice stop phrases during speech'),
+                       ('natural_interrupt', 'Natural interruption (experimental; echo reduction in speakers mode)')]:
         var = tk.BooleanVar(value=saved[key]); variables[key] = var
         ttk.Checkbutton(frame, text=label, variable=var).pack(anchor='w', pady=3)
     def save():

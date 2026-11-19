@@ -31,6 +31,7 @@ class MemoryAndActionsTests(IsolatedTests):
         self.assistant.memory = Memory()
         self.assistant.brain = brain.Brain(memory=self.assistant.memory)
         self.assistant.desktop = Desktop()
+        self.assistant.confirm = Mock(return_value=True)
         self.addCleanup(self.assistant.desktop.close)
 
     def test_explicit_memory_survives_restart_and_can_be_deleted(self):
@@ -215,8 +216,8 @@ class AudioAndScreenTests(IsolatedTests):
         settings.save({'vision_model': 'test-vision'})
         agent = Mock(); agent.ollama_url = 'http://localhost:11434'
         agent._answer_text.side_effect = lambda text: text
-        response = Mock(); response.json.return_value = {'message': {'content': 'An editor.'}}
-        with patch('PIL.ImageGrab.grab', return_value=Image.new('RGB', (16, 16))), patch.object(screen.requests, 'post', return_value=response) as post:
+        response = Mock(is_redirect=False); response.json.return_value = {'message': {'content': 'An editor.'}}
+        with patch('PIL.ImageGrab.grab', return_value=Image.new('RGB', (16, 16))), patch.object(screen.requests.Session, 'post', return_value=response) as post:
             self.assertEqual(screen.explain_screen(agent), 'An editor.')
         self.assertEqual(post.call_args.kwargs['json']['model'], 'test-vision')
         agent.client.chat.completions.create.assert_not_called()

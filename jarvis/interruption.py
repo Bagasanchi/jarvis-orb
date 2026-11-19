@@ -7,6 +7,7 @@ import time
 from jarvis.config import SAMPLE_RATE
 from jarvis.audio import input_stream
 from jarvis import settings
+from jarvis.echo import EchoCanceller
 
 STOP_PHRASES = frozenset(('jarvis stop', 'stop jarvis', 'stop talking', 'stop'))
 
@@ -16,12 +17,13 @@ def is_stop_phrase(text):
 
 
 class VoiceInterruption:
-    def __init__(self, speaker, model, enabled=None, listener=None):
+    def __init__(self, speaker, model, enabled=None, listener=None, echo=False):
         self.speaker, self.model, self.listener = speaker, model, listener
         self.enabled = settings.get('voice_interrupt') if enabled is None else enabled
         self.natural = settings.get('natural_interrupt')
         self.done = threading.Event()
         self.thread = None
+        self.echo = EchoCanceller(speaker.reference, settings.get("speech_threshold")) if echo else None
 
     def __enter__(self):
         if self.enabled:
@@ -53,6 +55,8 @@ class VoiceInterruption:
             heard_since = None
             with input_stream() as stream:
                 while not self.done.is_set():
+                    if self.listener is not None and getattr(self.listener, "muted", None) is not None and self.listener.muted.is_set() is True:
+                        break
                     raw, _ = stream.read(int(SAMPLE_RATE*.05))
                     if self.done.is_set():
                         break
@@ -61,6 +65,13 @@ class VoiceInterruption:
                         buffered.clear(); heard_since = None
                         rec.Reset()
                         continue
+                    if self.echo is not None:
+                        raw, near = self.echo.process(raw)
+                        self.speaker.echo_status = self.echo.status
+                        if not near:
+                            buffered.clear(); heard_since = None
+                            rec.Reset()
+                            continue
                     buffered.append(raw)
                     complete = rec.AcceptWaveform(raw)
                     result = json.loads(rec.Result() if complete else rec.PartialResult())
